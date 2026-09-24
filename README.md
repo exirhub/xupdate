@@ -137,6 +137,27 @@ sudo journalctl -u x-ui -u xupdate-nginx --since '10 minutes ago'
 
 `doctor` checks service state, the exact local TLS certificate, ALPN `h2`, the backend HTTP/2 SETTINGS response, the website, and the panel route. `--public` additionally checks the HTTPS `/healthz` endpoint through public DNS. This is not an authenticated end-to-end VLESS traffic test; verify that with the existing client profile after DNS is ready.
 
+Each required service is checked separately. Failed probes identify the service or endpoint, including origin TLS on `127.0.0.1:443`, the Xray backend on `127.0.0.1:10001`, and the panel route. An active panel process alone does not prove that its Xray child has opened the backend port.
+
+For an occupied port 80, inspect its owner and the two possible Nginx units:
+
+```bash
+sudo ss -ltnp '( sport = :80 )'
+sudo ps -ww -C nginx -o pid,ppid,user,args
+sudo systemctl status nginx.service xupdate-nginx.service --no-pager -l
+```
+
+The managed frontend is `xupdate-nginx.service`, using `/etc/xupdate/nginx.conf`; starting the distribution's separate `nginx.service` on the same ports causes a conflict. A successful `nginx -t` verifies configuration syntax, not listener availability.
+
+After pulling a diagnostics update, run the new doctor from the checkout without reinstalling or replacing the live database:
+
+```bash
+git pull --ff-only
+sudo python3 -m xupdate doctor
+```
+
+The installed `/usr/local/bin/xupdate` still uses its copy under `/opt/xupdate` until that code is updated. To investigate a refused backend connection, inspect `sudo journalctl -u x-ui -n 80 --no-pager` and the live listener list. Do not use `--clean-install` to update diagnostics on an existing deployment.
+
 `xupdate-refresh.timer` checks the managed gRPC service route every minute and validates Nginx before a supported route change is reloaded. Clients must receive a matching service name if you change it. Keep the inbound's loopback address, internal port, and TLS-off backend setting. Panel base path/port changes, new inbounds, and domain or certificate changes require a reviewed configuration update. Routine client additions, removals, quotas, and traffic accounting remain panel operations.
 
 Rollback removes the installation's managed services and files. Normal installations first save the current runtime database; clean installations skip that backup. OS packages and logs are retained:

@@ -21,6 +21,7 @@ This records checks actually performed while preparing XUPDATE 0.1.0. It is not 
 | Clean removal preserves the bundled seed, does not follow CLI symlinks, and creates no backup | Passed in the cleanup tests |
 | Port-conflict/stop-failure checks prevent removal of previous files | Passed with simulated systemd |
 | Three package-bootstrap tests: transient DNS error, package-download error, and success | Passed with simulated APT; failures stop continuation |
+| Nine health diagnostic tests: individual service checks, refused ports, timeout, protocol/TLS errors, panel/public failures, and success | Passed with simulated services and network probes |
 | Python source parsing | Passed |
 | Bash syntax check | Passed |
 | JavaScript syntax check | Passed |

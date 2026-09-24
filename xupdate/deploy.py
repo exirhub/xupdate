@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import hashlib
 import http.client
 import json
@@ -268,29 +269,54 @@ def recv_exact(conn, count):
         result += part
     return result
 
+@contextmanager
+def health_stage(label):
+    """Name the failed probe without exposing response bodies or credentials."""
+    try:
+        yield
+    except ConfigError as error:
+        raise ConfigError(f"{label}: {error}") from error
+    except ConnectionRefusedError as error:
+        raise ConfigError(f"{label}: connection refused; check the listener and service journal.") from error
+    except (TimeoutError, subprocess.TimeoutExpired) as error:
+        raise ConfigError(f"{label}: probe timed out.") from error
+    except ssl.SSLError as error:
+        raise ConfigError(f"{label}: TLS negotiation or certificate verification failed.") from error
+    except (OSError, http.client.HTTPException) as error:
+        raise ConfigError(f"{label}: {type(error).__name__}; inspect the service journal.") from error
+
 def health(plan, public=False):
-    command(["systemctl", "is-active", "--quiet", "x-ui", "xupdate-nginx"])
-    with origin_connection(plan, "h2") as conn:
-        if conn.selected_alpn_protocol() != "h2":
-            raise ConfigError("The frontend did not negotiate h2.")
-    with socket.create_connection(("127.0.0.1", plan["backend_port"]), timeout=8) as conn:
-        conn.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"+bytes.fromhex("000000040000000000"))
-        header = recv_exact(conn, 9)
-        if header[3] != 4 or header[5:9] != b"\0\0\0\0":
-            raise ConfigError("The backend did not provide an HTTP/2 SETTINGS frame.")
-    status, body = origin_http(plan, "/healthz")
-    if status != 200 or body != b"ok\n":
-        raise ConfigError("Local gateway health check failed.")
-    status, body = origin_http(plan, "/")
-    if status != 200 or b"XUPDATE" not in body:
-        raise ConfigError("The local website is unavailable.")
-    status, body = origin_http(plan, plan["panel_path"])
-    if status not in (200, 301, 302, 303, 307, 308):
-        raise ConfigError("The preserved panel route is unavailable.")
+    # is-active with multiple units succeeds when ANY unit is active.
+    for unit in ("x-ui", "xupdate-nginx"):
+        with health_stage(f"service {unit}"):
+            command(["systemctl", "is-active", "--quiet", unit])
+    with health_stage("frontend TLS (xupdate-nginx, 127.0.0.1:443)"):
+        with origin_connection(plan, "h2") as conn:
+            if conn.selected_alpn_protocol() != "h2":
+                raise ConfigError("The frontend did not negotiate h2.")
+    with health_stage(f'Xray gRPC backend (127.0.0.1:{plan["backend_port"]})'):
+        with socket.create_connection(("127.0.0.1", plan["backend_port"]), timeout=8) as conn:
+            conn.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"+bytes.fromhex("000000040000000000"))
+            header = recv_exact(conn, 9)
+            if header[3] != 4 or header[5:9] != b"\0\0\0\0":
+                raise ConfigError("The backend did not provide an HTTP/2 SETTINGS frame.")
+    with health_stage("local gateway HTTPS (127.0.0.1:443)"):
+        status, body = origin_http(plan, "/healthz")
+        if status != 200 or body != b"ok\n":
+            raise ConfigError(f"Gateway health response is invalid (HTTP {status}).")
+    with health_stage("website HTTPS (127.0.0.1:443)"):
+        status, body = origin_http(plan, "/")
+        if status != 200 or b"XUPDATE" not in body:
+            raise ConfigError(f"Website response is invalid (HTTP {status}).")
+    with health_stage(f'panel route (HTTPS 443 -> 127.0.0.1:{plan["panel_port"]})'):
+        status, body = origin_http(plan, plan["panel_path"])
+        if status not in (200, 301, 302, 303, 307, 308):
+            raise ConfigError(f"The panel route returned HTTP {status}.")
     if public:
-        with urllib.request.urlopen("https://"+plan["domain"]+"/healthz", timeout=15) as r:
-            if r.status != 200 or r.read(64) != b"ok\n":
-                raise ConfigError("Public CDN health check failed.")
+        with health_stage("public HTTPS /healthz"):
+            with urllib.request.urlopen("https://"+plan["domain"]+"/healthz", timeout=15) as r:
+                if r.status != 200 or r.read(64) != b"ok\n":
+                    raise ConfigError(f"Public health response is invalid (HTTP {r.status}).")
     return {"services": "active", "origin_tls_pin": "matched", "frontend_alpn": "h2",
             "backend": "h2c", "website": "ok", "panel": "ok",
             "public_cdn": "checked" if public else "not checked",
