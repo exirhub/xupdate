@@ -4,31 +4,27 @@ A standalone installer for the supplied 3x-ui database, preserving its **VLESS /
 
 ## Install from GitHub
 
-Copy your supplied database to `/root/x-ui.db` on the new server, then run:
+The supplied database is included as `x-ui.db` at the repository root. The installer uses it automatically:
 
 ```bash
 git clone https://github.com/exirhub/xupdate.git
 cd xupdate
-sudo bash install.sh --db /root/x-ui.db
-```
-
-The public repository contains the installer, website, tests, and documentation. The original database and its private key are supplied locally and are excluded from Git. See [the Persian guide](README.fa.md) and [the validation record](VALIDATION.md).
-
-## Install the private bundle
-
-Use a fresh Ubuntu 24.04+ or Debian 12+ server with systemd, amd64 or arm64, and outbound access to the distribution package repositories and GitHub release downloads.
-
-```bash
-tar -xzf XUPDATE-private-install.tar.gz
-cd XUPDATE
 sudo bash install.sh
 ```
 
-The private bundle includes `private/x-ui.db`, a byte-for-byte copy of the supplied export. Treat this bundle as a credential backup; do not upload it to a public repository. `XUPDATE-source.tar.gz` contains the publishable source without this database or any exported keys. With the public source, provide the database explicitly:
+The bundled `x-ui.db` is a byte-for-byte copy of `57.128.162.236_2026-09-24_171935.db`, published at the owner's explicit request with its existing embedded certificate, key, accounts, and settings. Check its checksum with `sha256sum -c x-ui.db.sha256`. The installer opens this seed read-only and prepares a separate runtime copy. See [the Persian guide](README.fa.md) and [the validation record](VALIDATION.md).
+
+## Requirements and alternative database
+
+Use a fresh Ubuntu 24.04+ or Debian 12+ server with systemd, amd64 or arm64, and outbound access to the distribution package repositories and GitHub release downloads.
+
+To use a different local database, override the bundled file explicitly:
 
 ```bash
 sudo bash install.sh --db /root/x-ui.db
 ```
+
+Previously downloaded installation bundles with `private/x-ui.db` remain supported: that file is used when the root `x-ui.db` is absent. The earlier source-only archive predates the bundled database and still needs `--db`.
 
 The installer pins 3x-ui **v3.8.5** and verifies the upstream archive SHA-256 from `upstream.lock.json`. It extracts the official binaries without executing an upstream remote installation script. It installs the required OS packages and its own systemd units. Existing x-ui deployments or conflicting ports cause installation to stop.
 
@@ -131,4 +127,4 @@ Tests use the supplied database's schema with synthetic rows and temporary test 
 - [Cloudflare gRPC requirements](https://developers.cloudflare.com/network/grpc-connections/)
 - [Cloudflare 521 troubleshooting](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-521/)
 
-3x-ui and its bundled components retain their upstream licenses. Tailwind CSS is MIT-licensed; its build dependencies are pinned in `package-lock.json`. No upstream binaries or third-party private database are embedded in the public source bundle.
+3x-ui and its bundled components retain their upstream licenses. Tailwind CSS is MIT-licensed; its build dependencies are pinned in `package-lock.json`. Upstream binaries are downloaded during installation; the root database is the owner's supplied export.

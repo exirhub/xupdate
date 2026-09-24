@@ -14,11 +14,14 @@ from . import deploy
 def main():
     project = Path(__file__).resolve().parent.parent
     defaults = json.loads((project/"deployment-defaults.json").read_text())
+    bundled_db = project/"x-ui.db"
+    if not bundled_db.is_file() and (project/"private/x-ui.db").is_file():
+        bundled_db = project/"private/x-ui.db"
     p = argparse.ArgumentParser(prog="xupdate")
     commands = p.add_subparsers(dest="action", required=True)
     for name in ("inspect", "render", "install"):
         sub = commands.add_parser(name)
-        sub.add_argument("--db", type=Path, default=project/"private/x-ui.db")
+        sub.add_argument("--db", type=Path, default=bundled_db)
         sub.add_argument("--domain", default=defaults.get("domain", ""))
         sub.add_argument("--public-address", default=defaults.get("public_address", ""))
         sub.add_argument("--backend-port", type=int, default=defaults.get("backend_port", 10001))

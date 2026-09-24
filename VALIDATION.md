@@ -6,8 +6,10 @@ This records checks actually performed while preparing XUPDATE 0.1.0. It is not 
 | --- | --- |
 | Supplied SQLite export `quick_check` | Passed |
 | Private bundle seed compared byte-for-byte with the supplied file | Passed |
+| Repository root `x-ui.db` compared byte-for-byte with the supplied file | Passed |
+| Default database selection with no `--db` override | Verified with the bundled seed |
 | Input file SHA-256 before/after rendering | Unchanged |
-| Working profile's client identity linked to the supplied enabled inbound | Confirmed, without publishing the identity |
+| Working profile's client identity linked to the supplied enabled inbound | Confirmed |
 | gRPC service name, authority, and multi-mode settings | Unchanged |
 | Embedded certificate and private key public components | Match |
 | Certificate covers `exirhub.site` and is currently valid | Passed; expires 2041-09-20 |
