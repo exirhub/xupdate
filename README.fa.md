@@ -55,6 +55,52 @@ sudo xupdate doctor --public
 
 آدرس ورود پنل از همان مسیر ذخیره‌شده در دیتابیس ساخته می‌شود. نام کاربری، رمز پنل، UUID کلاینت‌ها، شناسه‌های اشتراک، محدودیت‌ها و مصرف ثبت‌شده حفظ می‌شوند.
 
+## خطای DNS هنگام دریافت بسته‌ها
+
+خطای `Temporary failure resolving` برای مخزن‌های اوبونتو یعنی سرور نتوانسته نام مخزن را به IP تبدیل کند. اگر نصب در همین مرحلهٔ APT متوقف شود، حذف x-ui قبلی هنوز شروع نشده است. گزینهٔ `--fix-missing` مشکل DNS را حل نمی‌کند.
+
+نصب‌کننده اکنون با `apt-get --error-on=any update` در صورت خطای دریافت فهرست بسته‌ها متوقف می‌شود و با فهرست قدیمی ادامه نمی‌دهد. تنظیم DNS سرور را خودکار تغییر نمی‌دهد.
+
+روی Ubuntu دارای `systemd-resolved`، برای تنظیم موقت DNS این بلوک را اجرا کن. باید مسیر IPv4 و دسترسی به DNSهای انتخاب‌شده برقرار باشد:
+
+```bash
+(
+    set -euo pipefail
+    command -v resolvectl >/dev/null
+    sudo systemctl restart systemd-resolved
+    xupdate_iface=$(ip -4 route get 1.1.1.1 | awk '{for (i=1; i<NF; i++) if ($i == "dev") {print $(i+1); exit}}')
+    test -n "$xupdate_iface"
+    sudo resolvectl dns "$xupdate_iface" 1.1.1.1 8.8.8.8
+    sudo resolvectl domain "$xupdate_iface" '~.'
+    sudo resolvectl flush-caches
+    for xupdate_host in nova.clouds.archive.ubuntu.com security.ubuntu.com github.com; do
+        timeout 20 getent ahosts "$xupdate_host" || {
+            echo "DNS lookup still failed: $xupdate_host" >&2
+            exit 1
+        }
+    done
+)
+```
+
+اگر بررسی هر سه نام موفق بود، از پوشهٔ پروژه اجرا کن:
+
+```bash
+git pull --ff-only
+sudo bash install.sh --clean-install
+```
+
+این تنظیم DNS موقت است و ممکن است با راه‌اندازی مجدد یا تغییر تنظیمات شبکه از بین برود. فایل `/etc/resolv.conf` بازنویسی نمی‌شود. اگر `resolvectl` وجود نداشت یا خطا ادامه داشت، خروجی این دستورها برای تشخیص علت لازم است:
+
+```bash
+ip -4 route
+readlink -f /etc/resolv.conf
+cat /etc/resolv.conf
+systemctl --no-pager --full status systemd-resolved
+resolvectl --no-pager status
+```
+
+پس از تشخیص علت، DNS دائمی باید از طریق مدیر شبکهٔ موجود سرور تنظیم شود. تنظیم ناموفق resolver یا محدودیت خروجی شبکه نیز می‌تواند باعث این خطا شود.
+
 ## تغییر دقیق تنظیمات
 
 فایل ورودی دست نمی‌خورد؛ تغییرات فقط روی کپی اجرایی انجام می‌شود. Nginx با همان گواهی و کلید روی پورت 443 قرار می‌گیرد، سایت را نمایش می‌دهد و مسیر `google.internal.analytics.v1.Tracker` را به همان ورودی gRPC روی `127.0.0.1:10001` می‌فرستد. TLS در Nginx پایان می‌یابد و ارتباط داخلی روی loopback است. اطلاعات Host در پنل باعث می‌شود لینک‌های خروجی همچنان TLS، پورت 443، SNI دامنهٔ `exirhub.site` و آدرس عمومی `188.114.97.6` داشته باشند.

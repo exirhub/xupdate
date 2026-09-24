@@ -43,6 +43,47 @@ The installer first prepares the supplied database, verifies the release and cor
 
 Clean mode also works when only a leftover `/etc/x-ui` directory exists. If installation fails after deletion, incomplete new files are cleaned up; the previous panel is not restored. `xupdate rollback` after a clean installation removes the new deployment without creating a database backup. Earlier backups already on the server are not deleted.
 
+## APT / DNS troubleshooting
+
+`Temporary failure resolving 'nova.clouds.archive.ubuntu.com'` or `security.ubuntu.com` means the server could not resolve the package repository hostname. A failure at this package-bootstrap stage occurs before XUPDATE removes the old x-ui installation. `--fix-missing` does not repair DNS.
+
+The installer uses `apt-get --error-on=any update`: even transient repository errors stop installation, instead of proceeding with stale package indexes. It leaves the server's resolver settings unchanged.
+
+On an Ubuntu server using `systemd-resolved`, try this temporary DNS configuration. It requires an IPv4 route and access to the chosen public DNS servers. The subshell stops on an error and does not change the interactive shell's error handling:
+
+```bash
+(
+    set -euo pipefail
+    command -v resolvectl >/dev/null
+    sudo systemctl restart systemd-resolved
+    xupdate_iface=$(ip -4 route get 1.1.1.1 | awk '{for (i=1; i<NF; i++) if ($i == "dev") {print $(i+1); exit}}')
+    test -n "$xupdate_iface"
+    sudo resolvectl dns "$xupdate_iface" 1.1.1.1 8.8.8.8
+    sudo resolvectl domain "$xupdate_iface" '~.'
+    sudo resolvectl flush-caches
+    for xupdate_host in nova.clouds.archive.ubuntu.com security.ubuntu.com github.com; do
+        timeout 20 getent ahosts "$xupdate_host" || {
+            echo "DNS lookup still failed: $xupdate_host" >&2
+            exit 1
+        }
+    done
+)
+```
+
+Only after the lookups succeed, run `git pull --ff-only` and `sudo bash install.sh --clean-install` from the checkout. The DNS changes are runtime settings and may be lost after a reboot or network reconfiguration. Once the cause is identified, configure persistent DNS through the server's existing network manager. This procedure does not rewrite `/etc/resolv.conf`.
+
+If `resolvectl` is unavailable or lookups still fail, collect these diagnostics before changing resolver files or package mirrors:
+
+```bash
+ip -4 route
+readlink -f /etc/resolv.conf
+cat /etc/resolv.conf
+systemctl --no-pager --full status systemd-resolved
+resolvectl --no-pager status
+```
+
+The remaining cause may be resolver configuration, an unavailable DNS server, or blocked outbound networking. A successful DNS lookup alone does not prove that HTTP package downloads or GitHub release downloads are reachable.
+
 ## Exact deployment profile
 
 | Setting | Value |
@@ -128,10 +169,12 @@ Deployment uses Python's standard library and a prebuilt stylesheet. Node.js is 
 npm ci
 npm run build:css
 python3 -m unittest discover -s tests -v
-bash -n install.sh
+bash -n install.sh && bash -n scripts/install-dependencies.sh
 ```
 
 Tests use the supplied database's schema with synthetic rows and temporary test certificates. They verify preservation, public Host overrides, certificate mismatches, route collisions, and rejection of transport conversion. Clean-install tests use temporary directories and simulated systemd calls to verify deletion scope, port-conflict handling, and absence of backups. See `VALIDATION.md` for performed and outstanding checks.
+
+Package-bootstrap tests simulate APT's transient DNS failure behavior, a successful installation, and a package-download failure. They verify that a failed APT stage prevents continuation without invoking the host's APT or systemd.
 
 ## Sources
 
@@ -141,5 +184,7 @@ Tests use the supplied database's schema with synthetic rows and temporary test 
 - [Nginx HTTP/2 module](https://nginx.org/en/docs/http/ngx_http_v2_module.html)
 - [Cloudflare gRPC requirements](https://developers.cloudflare.com/network/grpc-connections/)
 - [Cloudflare 521 troubleshooting](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-521/)
+- [APT update error handling](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html)
+- [systemd-resolved runtime DNS configuration](https://manpages.debian.org/trixie/systemd-resolved/resolvectl.1.en.html)
 
 3x-ui and its bundled components retain their upstream licenses. Tailwind CSS is MIT-licensed; its build dependencies are pinned in `package-lock.json`. Upstream binaries are downloaded during installation; the root database is the owner's supplied export.

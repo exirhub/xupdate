@@ -20,6 +20,7 @@ This records checks actually performed while preparing XUPDATE 0.1.0. It is not 
 | Live TCP port check rejects an active listener and permits immediate reuse after connection shutdown | Passed |
 | Clean removal preserves the bundled seed, does not follow CLI symlinks, and creates no backup | Passed in the cleanup tests |
 | Port-conflict/stop-failure checks prevent removal of previous files | Passed with simulated systemd |
+| Three package-bootstrap tests: transient DNS error, package-download error, and success | Passed with simulated APT; failures stop continuation |
 | Python source parsing | Passed |
 | Bash syntax check | Passed |
 | JavaScript syntax check | Passed |
@@ -29,6 +30,7 @@ This records checks actually performed while preparing XUPDATE 0.1.0. It is not 
 | Pinned Xray binary configuration test | Not run here; release binary unavailable |
 | systemd installation, live subscription export, and rollback | Not run on a destination server |
 | Cloudflare path and authenticated VLESS traffic | Not tested from this environment |
+| DNS repair on the destination server | Not run here; documented commands require execution on the server |
 
 The installer runs `nginx -t`, the pinned core's `run -test`, certificate checks, port checks, and local service readiness checks on the destination. Failure after new installation begins removes its managed files and services. Normal mode retains database backups; explicitly selected clean mode creates no backup and does not restore the previous panel. Real systemd deletion and installation have not been exercised end-to-end in this build environment.
 

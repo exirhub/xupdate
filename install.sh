@@ -45,10 +45,8 @@ if [[ "$nginx_was_present" == 1 ]] && systemctl is-enabled --quiet nginx; then
     echo "An existing enabled Nginx service needs a reviewed migration." >&2
     exit 1
 fi
-export DEBIAN_FRONTEND=noninteractive
-apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 update
-apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 install -y \
-    ca-certificates curl python3 openssl nginx iproute2
+source "$project_dir/scripts/install-dependencies.sh"
+xupdate_install_dependencies
 if [[ "$nginx_was_present" == 0 ]]; then
     systemctl disable --now nginx
 fi
