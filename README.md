@@ -16,7 +16,7 @@ The bundled `x-ui.db` is a byte-for-byte copy of `57.128.162.236_2026-09-24_1719
 
 ## Requirements and alternative database
 
-Use a fresh Ubuntu 24.04+ or Debian 12+ server with systemd, amd64 or arm64, and outbound access to the distribution package repositories and GitHub release downloads.
+Use Ubuntu 24.04+ or Debian 12+ with systemd, amd64 or arm64, and outbound access to the distribution package repositories and GitHub release downloads. Existing x-ui installations can be removed with the clean-install option below.
 
 To use a different local database, override the bundled file explicitly:
 
@@ -26,7 +26,22 @@ sudo bash install.sh --db /root/x-ui.db
 
 Previously downloaded installation bundles with `private/x-ui.db` remain supported: that file is used when the root `x-ui.db` is absent. The earlier source-only archive predates the bundled database and still needs `--db`.
 
-The installer pins 3x-ui **v3.8.5** and verifies the upstream archive SHA-256 from `upstream.lock.json`. It extracts the official binaries without executing an upstream remote installation script. It installs the required OS packages and its own systemd units. Existing x-ui deployments or conflicting ports cause installation to stop.
+The installer pins 3x-ui **v3.8.5** and verifies the upstream archive SHA-256 from `upstream.lock.json`. It extracts the official binaries without executing an upstream remote installation script. It installs the required OS packages and its own systemd units.
+
+## Clean installation over an existing panel
+
+If `/etc/x-ui` already exists, run these commands from the checkout:
+
+```bash
+git pull --ff-only
+sudo bash install.sh --clean-install
+```
+
+This explicitly deletes the previous x-ui/XUPDATE installation and creates **no database backup**. The replacement uses the repository's bundled `x-ui.db`, or the file selected with `--db`. Previous server accounts and settings are removed with the old database.
+
+The installer first prepares the supplied database, verifies the release and core configuration, and checks Nginx syntax. It then stops the known x-ui/XUPDATE services and checks the required ports before removing standard installation directories, service units/drop-ins, old CLI wrappers, and x-ui/XUPDATE logs. The source checkout and bundled database must be outside those installation directories. A separate Nginx service or unrelated process is not removed; a port conflict stops cleanup before old files are deleted.
+
+Clean mode also works when only a leftover `/etc/x-ui` directory exists. If installation fails after deletion, incomplete new files are cleaned up; the previous panel is not restored. `xupdate rollback` after a clean installation removes the new deployment without creating a database backup. Earlier backups already on the server are not deleted.
 
 ## Exact deployment profile
 
@@ -60,7 +75,7 @@ The input file is opened read-only and remains untouched. The installer creates 
 
 No new inbound is created. No transport conversion, client replacement, key generation, credential reset, or traffic reset occurs. The original inbound ID, service name, authority, multi-mode setting, and remark remain as supplied. A misleading display name containing `XHTTP` is left intact; it does not determine the transport.
 
-TLS between Nginx and the core is unnecessary on the same host's loopback interface. Client-to-Cloudflare and Cloudflare-to-origin connections still use TLS. The original key is stored at `/etc/xupdate/tls/origin.key` with mode `0600`. Backups live in `/var/backups/xupdate/` with restricted access.
+TLS between Nginx and the core is unnecessary on the same host's loopback interface. Client-to-Cloudflare and Cloudflare-to-origin connections still use TLS. The original key is stored at `/etc/xupdate/tls/origin.key` with mode `0600`. Normal installation backups live in `/var/backups/xupdate/`; clean mode creates no backup.
 
 ## Preview, operate, and recover
 
@@ -83,7 +98,7 @@ sudo journalctl -u x-ui -u xupdate-nginx --since '10 minutes ago'
 
 `xupdate-refresh.timer` checks the managed gRPC service route every minute and validates Nginx before a supported route change is reloaded. Clients must receive a matching service name if you change it. Keep the inbound's loopback address, internal port, and TLS-off backend setting. Panel base path/port changes, new inbounds, and domain or certificate changes require a reviewed configuration update. Routine client additions, removals, quotas, and traffic accounting remain panel operations.
 
-Rollback removes the fresh installation's managed services and files after backing up the current runtime database. It retains backups, OS packages, and logs:
+Rollback removes the installation's managed services and files. Normal installations first save the current runtime database; clean installations skip that backup. OS packages and logs are retained:
 
 ```bash
 sudo xupdate rollback
@@ -116,7 +131,7 @@ python3 -m unittest discover -s tests -v
 bash -n install.sh
 ```
 
-Tests use the supplied database's schema with synthetic rows and temporary test certificates. They verify preservation, public Host overrides, certificate mismatches, route collisions, and rejection of transport conversion. See `VALIDATION.md` for checks performed on this deliverable and the outstanding server-side checks.
+Tests use the supplied database's schema with synthetic rows and temporary test certificates. They verify preservation, public Host overrides, certificate mismatches, route collisions, and rejection of transport conversion. Clean-install tests use temporary directories and simulated systemd calls to verify deletion scope, port-conflict handling, and absence of backups. See `VALIDATION.md` for performed and outstanding checks.
 
 ## Sources
 

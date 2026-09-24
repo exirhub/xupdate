@@ -30,6 +30,8 @@ def main():
             sub.add_argument("--legacy-nginx", action="store_true")
         if name == "install":
             sub.add_argument("--archive", type=Path, help="Offline verified 3x-ui release archive")
+            sub.add_argument("--clean-install", action="store_true",
+                             help="Remove the previous x-ui/XUPDATE installation without backup")
     doc = commands.add_parser("doctor")
     doc.add_argument("--public", action="store_true", help="Also probe the real proxied hostname")
     commands.add_parser("refresh")
@@ -51,7 +53,8 @@ def main():
                 result = public_summary(prepare(args.db, args.output, project,
                                                modern=not args.legacy_nginx, **kw))
             else:
-                result = deploy.install(project, args.db, offline=args.archive, **kw)
+                result = deploy.install(project, args.db, offline=args.archive,
+                                        clean_install=args.clean_install, **kw)
         elif args.action == "doctor":
             result = deploy.health(deploy.state_read()["plan"], public=args.public)
         elif args.action == "refresh":

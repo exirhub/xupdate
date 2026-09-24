@@ -16,6 +16,10 @@ This records checks actually performed while preparing XUPDATE 0.1.0. It is not 
 | Every row in 18 non-migration tables | Identical between the input and staged database |
 | Inbound accounting, client settings, tag, ID, remark, sniffing | Preserved |
 | Ten automated import/certificate/routing tests using synthetic data | Passed |
+| Five clean-install tests with temporary files and simulated systemd | Passed |
+| Live TCP port check rejects an active listener and permits immediate reuse after connection shutdown | Passed |
+| Clean removal preserves the bundled seed, does not follow CLI symlinks, and creates no backup | Passed in the cleanup tests |
+| Port-conflict/stop-failure checks prevent removal of previous files | Passed with simulated systemd |
 | Python source parsing | Passed |
 | Bash syntax check | Passed |
 | JavaScript syntax check | Passed |
@@ -26,7 +30,7 @@ This records checks actually performed while preparing XUPDATE 0.1.0. It is not 
 | systemd installation, live subscription export, and rollback | Not run on a destination server |
 | Cloudflare path and authenticated VLESS traffic | Not tested from this environment |
 
-The installer runs `nginx -t`, the pinned core's `run -test`, certificate checks, port checks, and local service readiness checks on the destination. Failure after installation begins triggers rollback of its managed files and services, preserving a database backup. Those gates are implemented but have not been exercised end-to-end in this build environment.
+The installer runs `nginx -t`, the pinned core's `run -test`, certificate checks, port checks, and local service readiness checks on the destination. Failure after new installation begins removes its managed files and services. Normal mode retains database backups; explicitly selected clean mode creates no backup and does not restore the previous panel. Real systemd deletion and installation have not been exercised end-to-end in this build environment.
 
 Only these existing inbound columns differ in the staged runtime copy: `listen`, `port`, `stream_settings`, `share_addr_strategy`, and `share_addr`. A public Host record and management listener/URL settings are added or updated. The input database is never replaced.
 

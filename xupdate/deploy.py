@@ -1,4 +1,4 @@
-"""Fresh-server installation, operational checks, and reversible owned-file changes."""
+"""Fresh or explicitly clean installation, operational checks, and owned-file removal."""
 from __future__ import annotations
 
 import copy
@@ -32,6 +32,18 @@ OWNED = (
     "/opt/xupdate", "/var/www/xupdate", "/var/lib/xupdate",
 )
 STATE = Path("/etc/xupdate/installed.json")
+CLEAN_UNITS = ("xupdate-refresh.timer", "xupdate-refresh.service", "xupdate-nginx.service", "x-ui.service")
+CLEAN_PATHS = OWNED + (
+    "/usr/bin/x-ui", "/usr/local/bin/x-ui",
+    "/usr/lib/systemd/system/x-ui.service", "/lib/systemd/system/x-ui.service",
+    "/etc/systemd/system/x-ui.service.d",
+    "/usr/lib/systemd/system/x-ui.service.d", "/lib/systemd/system/x-ui.service.d",
+    "/run/systemd/system/x-ui.service", "/run/systemd/system/x-ui.service.d",
+    "/etc/systemd/system/xupdate-nginx.service.d",
+    "/etc/systemd/system/xupdate-refresh.service.d",
+    "/etc/systemd/system/xupdate-refresh.timer.d",
+    "/var/log/x-ui", "/var/log/xupdate", "/etc/logrotate.d/x-ui",
+)
 
 def command(args, *, cwd=None, env=None, timeout=90):
     r = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE,
@@ -71,6 +83,8 @@ def available_ports(ports):
                 continue
             try:
                 with socket.socket(family, socket.SOCK_STREAM) as s:
+                    # Recently stopped x-ui connections may leave TIME_WAIT sockets.
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     if family == socket.AF_INET6:
                         s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
                     s.bind((address, port))
@@ -282,11 +296,49 @@ def health(plan, public=False):
             "public_cdn": "checked" if public else "not checked",
             "authenticated_vless_end_to_end": "not tested"}
 
-def cleanup_owned(created, backup: Path):
+def clean_previous_installation(ports):
+    """Remove only known x-ui/XUPDATE paths, after validation and a port check."""
+    states = {}
+    for unit in CLEAN_UNITS:
+        result = subprocess.run(
+            ["systemctl", "show", unit, "--property=LoadState", "--property=ActiveState"],
+            capture_output=True, text=True, timeout=30)
+        props = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if props.get("LoadState") == "not-found":
+            continue
+        if result.returncode or not props.get("LoadState"):
+            raise ConfigError(f"Unable to inspect {unit}; previous files were not removed.")
+        states[unit] = props
+    stopped = []
+    try:
+        for unit in states:
+            command(["systemctl", "stop", unit])
+            stopped.append(unit)
+        # A separately managed web server must not cause deletion of a usable panel.
+        available_ports(ports)
+    except BaseException:
+        for unit in reversed(stopped):
+            if states[unit].get("ActiveState") in ("active", "activating", "reloading"):
+                subprocess.run(["systemctl", "start", unit], capture_output=True, timeout=45)
+        raise
+    print("Removing the previous x-ui/XUPDATE installation without creating a backup...", flush=True)
+    for unit in states:
+        # Static or masked units may not support disable; their exact files are removed below.
+        subprocess.run(["systemctl", "disable", unit], capture_output=True, timeout=30)
+    for value in CLEAN_PATHS:
+        path = Path(value)
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    command(["systemctl", "daemon-reload"])
+    subprocess.run(["systemctl", "reset-failed", *CLEAN_UNITS], capture_output=True, timeout=30)
+
+def cleanup_owned(created, backup: Path | None):
     subprocess.run(["systemctl", "disable", "--now", "xupdate-refresh.timer", "xupdate-nginx", "x-ui"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     current = Path("/etc/x-ui/x-ui.db")
-    if current.is_file():
+    if backup is not None and current.is_file():
         snapshot(current, backup/("before-rollback-"+str(time.time_ns())+".db"))
     for value in reversed(created):
         if value not in OWNED:
@@ -298,14 +350,21 @@ def cleanup_owned(created, backup: Path):
             shutil.rmtree(path)
     subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
 
-def install(project: Path, source: Path, *, domain="", advertised="", backend_port=10001, offline=None):
+def install(project: Path, source: Path, *, domain="", advertised="", backend_port=10001,
+            offline=None, clean_install=False):
     if os.geteuid() != 0 or not Path("/run/systemd/system").is_dir():
         raise ConfigError("Installation requires root on a systemd server.")
-    if STATE.is_file():
+    if STATE.is_file() and not clean_install:
         return health(json.loads(STATE.read_text())["plan"])
     occupied = [p for p in OWNED if Path(p).exists() or Path(p).is_symlink()]
-    if occupied:
-        raise ConfigError("Fresh-server installation only. Existing managed paths: " + ", ".join(occupied))
+    if occupied and not clean_install:
+        raise ConfigError("Existing installation found. Use --clean-install to remove it without backup. Paths: " + ", ".join(occupied))
+    if clean_install:
+        checkout = project.resolve()
+        for value in CLEAN_PATHS:
+            path = Path(value)
+            if checkout == path or path in checkout.parents:
+                raise ConfigError("Run clean installation from a checkout outside the old installation paths.")
     modern, ipv6 = nginx_capabilities()
     created = []
     backup = None
@@ -314,16 +373,21 @@ def install(project: Path, source: Path, *, domain="", advertised="", backend_po
         prepared = stage/"prepared"
         plan = prepare(source, prepared, project, domain=domain, advertised=advertised,
                        backend_port=backend_port, modern=modern, ipv6=ipv6)
-        available_ports([80, 443, plan["backend_port"], plan["panel_port"], plan["subscription_port"]])
+        ports = [80, 443, plan["backend_port"], plan["panel_port"], plan["subscription_port"]]
+        if not clean_install:
+            available_ports(ports)
         release, xray, version = download_release(project, stage, offline)
         check_assets(prepared/"core-validation.json", xray.parent)
         core_test(xray, prepared/"core-validation.json")
         command(["nginx", "-t", "-c", str(prepared/"nginx.preview.conf")])
-        backup = Path("/var/backups/xupdate")/time.strftime("%Y%m%d-%H%M%S")
-        backup.mkdir(parents=True, mode=0o700)
-        os.chmod(backup.parent, 0o700)
-        shutil.copy2(prepared/"original.db", backup/"original.db")
-        shutil.copy2(prepared/"plan.json", backup/"plan.json")
+        if clean_install:
+            clean_previous_installation(ports)
+        else:
+            backup = Path("/var/backups/xupdate")/time.strftime("%Y%m%d-%H%M%S")
+            backup.mkdir(parents=True, mode=0o700)
+            os.chmod(backup.parent, 0o700)
+            shutil.copy2(prepared/"original.db", backup/"original.db")
+            shutil.copy2(prepared/"plan.json", backup/"plan.json")
         try:
             def directory(path):
                 created.append(path)
@@ -362,7 +426,8 @@ def install(project: Path, source: Path, *, domain="", advertised="", backend_po
                 created.append(path)
                 write_private(Path(path), contents, 0o644)
             state = {"version": "0.1.0", "panel_version": version, "plan": plan,
-                     "backup": str(backup), "owned": created.copy(), "modern_nginx": modern, "ipv6": ipv6}
+                     "backup": str(backup) if backup else None, "clean_install": clean_install,
+                     "owned": created.copy(), "modern_nginx": modern, "ipv6": ipv6}
             write_private(STATE, json.dumps(state, indent=2)+"\n")
             command(["systemctl", "daemon-reload"])
             command(["systemctl", "enable", "--now", "x-ui"])
@@ -381,13 +446,16 @@ def install(project: Path, source: Path, *, domain="", advertised="", backend_po
                     last_error = error
                     time.sleep(2)
             if last_error:
-                raise ConfigError("Service readiness failed; restoring the pre-install state.") from last_error
+                raise ConfigError("Service readiness failed; removing the incomplete new installation.") from last_error
             command(["systemctl", "enable", "--now", "xupdate-refresh.timer"])
             print("Panel URL is recorded privately in /etc/xupdate/access.txt.")
             return result
         except BaseException:
             cleanup_owned(created, backup)
-            print("Managed changes rolled back. Database copies remain in "+str(backup), flush=True)
+            if backup:
+                print("Managed changes rolled back. Database copies remain in "+str(backup), flush=True)
+            else:
+                print("The incomplete installation was removed. Clean mode created no backup of the previous installation.", flush=True)
             raise
 
 def state_read():
@@ -449,8 +517,9 @@ def rollback():
     if os.geteuid() != 0:
         raise ConfigError("Rollback requires root.")
     state = state_read()
-    backup = Path(state["backup"])
-    backup.mkdir(parents=True, exist_ok=True, mode=0o700)
+    backup = Path(state["backup"]) if state.get("backup") else None
+    if backup:
+        backup.mkdir(parents=True, exist_ok=True, mode=0o700)
     cleanup_owned(state["owned"], backup)
-    return {"rolled_back": True, "database_backup": str(backup),
-            "note": "Fresh-install services removed; OS packages and logs retained."}
+    return {"rolled_back": True, "database_backup": str(backup) if backup else None,
+            "note": "Managed services removed; OS packages and logs retained. Clean mode does not restore the previous installation."}

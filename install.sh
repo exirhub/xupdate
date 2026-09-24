@@ -2,6 +2,14 @@
 set -Eeuo pipefail
 umask 077
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+clean_install=0
+for argument in "$@"; do
+    [[ "$argument" != "--clean-install" ]] || clean_install=1
+done
+if [[ "${1:-}" == "--help" ]]; then
+    cd "$project_dir"
+    exec python3 -m xupdate install --help
+fi
 if [[ "${1:-}" == "--dry-run" ]]; then
     shift
     cd "$project_dir"
@@ -17,12 +25,12 @@ if [[ ! -d /run/systemd/system ]]; then
 fi
 exec 9>/run/lock/xupdate-install.lock
 flock -n 9 || { echo "Another XUPDATE installation is active." >&2; exit 1; }
-if [[ -f /etc/xupdate/installed.json ]]; then
+if [[ "$clean_install" == 0 && -f /etc/xupdate/installed.json ]]; then
     exec /usr/local/bin/xupdate doctor
 fi
 for item in /etc/x-ui /usr/local/x-ui /etc/xupdate /opt/xupdate /var/www/xupdate; do
-    if [[ -e "$item" ]]; then
-        echo "Fresh-server installation only; existing path: $item" >&2
+    if [[ "$clean_install" == 0 && ( -e "$item" || -L "$item" ) ]]; then
+        echo "Existing installation: $item. Use --clean-install to remove it without backup and install from the bundled database." >&2
         exit 1
     fi
 done
@@ -46,4 +54,3 @@ if [[ "$nginx_was_present" == 0 ]]; then
 fi
 cd "$project_dir"
 exec python3 -m xupdate install "$@"
-
