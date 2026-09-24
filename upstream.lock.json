@@ -1,0 +1,15 @@
+{
+  "repository": "MHSanaei/3x-ui",
+  "version": "v3.8.5",
+  "assets": {
+    "amd64": {
+      "file": "x-ui-linux-amd64.tar.gz",
+      "sha256": "6a85c110a04a727613c933c54ae602b8d37dab8876c6e20a6d46623010dd9d3c"
+    },
+    "arm64": {
+      "file": "x-ui-linux-arm64.tar.gz",
+      "sha256": "2dd601a32426fb19b0eafdffaead374a9cdb66be4dfb39407f9f50fa4e7234e7"
+    }
+  }
+}
+
