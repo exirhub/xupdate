@@ -14,6 +14,18 @@ sudo bash install.sh
 
 The bundled `x-ui.db` is a byte-for-byte copy of `57.128.162.236_2026-09-24_171935.db`, published at the owner's explicit request with its existing embedded certificate, key, accounts, and settings. Check its checksum with `sha256sum -c x-ui.db.sha256`. The installer opens this seed read-only and prepares a separate runtime copy. See [the Persian guide](README.fa.md) and [the validation record](VALIDATION.md).
 
+## Cloud-init and datacenter startup scripts
+
+For installation during server creation, paste [`cloud-init/xupdate.yaml`](cloud-init/xupdate.yaml) into the provider's cloud-config/user-data field. For Bash startup-script fields or manual SSH installation, use [`scripts/bootstrap.sh`](scripts/bootstrap.sh). Both use the same bundled database and normal installer.
+
+```bash
+curl -fL --retry 5 --connect-timeout 15 --max-time 180 \
+  https://raw.githubusercontent.com/exirhub/xupdate/main/scripts/bootstrap.sh \
+  -o /tmp/xupdate-bootstrap.sh && sudo bash /tmp/xupdate-bootstrap.sh
+```
+
+See the [provider deployment guide](cloud-init/README.md) for Hetzner, OVH/OpenStack, DigitalOcean, Vultr, Linode, AWS, Azure, Google Compute Engine, and the generic SSH path for other providers. The bootstrap skips completed installations on repeated boots. Only explicit `--clean-install` replaces a previous panel without backup. [`scripts/diagnose.sh`](scripts/diagnose.sh) collects read-only installation diagnostics.
+
 ## Requirements and alternative database
 
 Use Ubuntu 24.04+ or Debian 12+ with systemd, amd64 or arm64, and outbound access to the distribution package repositories and GitHub release downloads. Existing x-ui installations can be removed with the clean-install option below.
@@ -191,6 +203,8 @@ npm ci
 npm run build:css
 python3 -m unittest discover -s tests -v
 bash -n install.sh && bash -n scripts/install-dependencies.sh
+python3 scripts/render-cloud-init.py --check
+bash -n scripts/bootstrap.sh && bash -n scripts/diagnose.sh
 ```
 
 Tests use the supplied database's schema with synthetic rows and temporary test certificates. They verify preservation, public Host overrides, certificate mismatches, route collisions, and rejection of transport conversion. Clean-install tests use temporary directories and simulated systemd calls to verify deletion scope, port-conflict handling, and absence of backups. See `VALIDATION.md` for performed and outstanding checks.

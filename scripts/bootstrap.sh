@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Standalone root startup script for Ubuntu 24.04+ / Debian 12+ cloud images.
+# Also embedded verbatim in cloud-init/xupdate.yaml by render-cloud-init.py.
+
+xupdate_bootstrap_paths() {
+    xupdate_root=""
+    xupdate_log=/var/log/xupdate-bootstrap.log
+    xupdate_state_dir=/var/lib/xupdate-bootstrap
+    xupdate_lock=/run/lock/xupdate-bootstrap.lock
+    xupdate_source_parent=/var/tmp
+    xupdate_repository=https://github.com/exirhub/xupdate.git
+}
+
+xupdate_bootstrap_preflight() {
+    [[ "$EUID" == 0 ]] || { echo "Run this script as root (sudo bash bootstrap.sh)." >&2; return 1; }
+    [[ -d /run/systemd/system ]] || { echo "A running systemd server is required." >&2; return 1; }
+    . /etc/os-release
+    case "${ID:-}" in
+        ubuntu) dpkg --compare-versions "${VERSION_ID:-0}" ge 24.04 ;;
+        debian) dpkg --compare-versions "${VERSION_ID:-0}" ge 12 ;;
+        *) echo "Use Ubuntu 24.04+ or Debian 12+." >&2; return 1 ;;
+    esac || { echo "The operating system version is too old." >&2; return 1; }
+    case "$(dpkg --print-architecture)" in
+        amd64|arm64) ;;
+        *) echo "Only amd64 and arm64 are supported." >&2; return 1 ;;
+    esac
+    command -v flock >/dev/null || { echo "flock (util-linux) is required." >&2; return 1; }
+}
+
+xupdate_bootstrap_cleanup() {
+    local result="$1"
+    trap - EXIT
+    if [[ -n "${xupdate_work:-}" && -d "$xupdate_work" ]]; then
+        rm -rf -- "$xupdate_work"
+    fi
+    if [[ "$result" != 0 ]]; then
+        printf 'XUPDATE bootstrap failed during %s (exit %s). See %s.\n' \
+            "${xupdate_stage:-preflight}" "$result" "$xupdate_log" >&2
+    fi
+    exit "$result"
+}
+
+xupdate_bootstrap_dependencies() {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 --error-on=any update
+    apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 install -y \
+        --no-install-recommends ca-certificates git curl python3
+}
+
+xupdate_bootstrap_fetch() {
+    local destination="$1" revision="$2" repository="$3" attempt fetched=0
+    git init --quiet "$destination"
+    git -C "$destination" remote add origin "$repository"
+    for attempt in 1 2 3 4 5; do
+        printf 'Fetching XUPDATE revision %s (%s/5)...\n' "$revision" "$attempt"
+        if timeout 180 git -C "$destination" \
+            -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 \
+            fetch --quiet --depth=1 origin "$revision"; then
+            fetched=1
+            break
+        fi
+        if [[ "$attempt" != 5 ]]; then
+            sleep "$((attempt * 2))"
+        fi
+    done
+    [[ "$fetched" == 1 ]] || { echo "GitHub source download failed." >&2; return 1; }
+    git -C "$destination" checkout --quiet --detach FETCH_HEAD
+}
+
+xupdate_bootstrap_main() {
+    set -Eeuo pipefail
+    umask 077
+    local revision="${XUPDATE_REF:-main}" clean_install=0 item commit
+    local -a install_arguments=()
+    while [[ "$#" -gt 0 ]]; do
+        case "$1" in
+            --ref)
+                [[ "$#" -ge 2 ]] || { echo "--ref requires a branch, tag, or commit." >&2; return 2; }
+                revision="$2"
+                shift 2
+                ;;
+            --clean-install) clean_install=1; install_arguments+=(--clean-install); shift ;;
+            --help|-h)
+                echo "Usage: sudo bash bootstrap.sh [--ref BRANCH_TAG_OR_COMMIT] [--clean-install]"
+                echo "Fresh installation uses the bundled database. Existing XUPDATE is skipped."
+                echo "--clean-install deletes the old installation without backup."
+                return 0
+                ;;
+            *) printf 'Unknown argument: %s\n' "$1" >&2; return 2 ;;
+        esac
+    done
+    [[ "$revision" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || {
+        echo "Invalid revision; use a branch, tag, or full commit SHA." >&2
+        return 2
+    }
+    xupdate_bootstrap_preflight
+    xupdate_bootstrap_paths
+    mkdir -p -- "$xupdate_state_dir" "$(dirname -- "$xupdate_lock")" "$(dirname -- "$xupdate_log")"
+    exec 8>"$xupdate_lock"
+    flock -n 8 || { echo "Another XUPDATE bootstrap is running." >&2; return 1; }
+    touch "$xupdate_log"
+    chmod 0600 "$xupdate_log"
+    exec > >(tee -a "$xupdate_log") 2>&1
+    xupdate_work=""
+    xupdate_stage=preflight
+    trap 'xupdate_bootstrap_cleanup "$?"' EXIT
+    printf 'XUPDATE bootstrap started at %s\n' "$(date -u +%FT%TZ)"
+
+    if [[ "$clean_install" == 0 && -f "$xupdate_root/etc/xupdate/installed.json" ]]; then
+        echo "Existing XUPDATE installation: skipped; no database or code was replaced."
+        echo "Check current health with: sudo xupdate doctor"
+        return 0
+    fi
+    for item in /etc/x-ui /usr/local/x-ui /etc/xupdate /opt/xupdate /var/www/xupdate; do
+        if [[ "$clean_install" == 0 && ( -e "$xupdate_root$item" || -L "$xupdate_root$item" ) ]]; then
+            printf 'Existing installation: %s. Use --clean-install only to replace it without backup.\n' "$item" >&2
+            return 1
+        fi
+    done
+
+    xupdate_stage=bootstrap-packages
+    xupdate_bootstrap_dependencies
+    xupdate_stage=source-download
+    xupdate_work=$(mktemp -d "$xupdate_source_parent/xupdate-src.XXXXXXXX")
+    xupdate_bootstrap_fetch "$xupdate_work" "$revision" "$xupdate_repository"
+    commit=$(git -C "$xupdate_work" rev-parse HEAD)
+    printf 'Source commit: %s\n' "$commit"
+    xupdate_stage=database-checksum
+    (cd "$xupdate_work" && sha256sum --check x-ui.db.sha256)
+    xupdate_stage=installation
+    bash "$xupdate_work/install.sh" "${install_arguments[@]}"
+    printf '%s\n' "$commit" > "$xupdate_state_dir/source-commit.txt"
+    echo "XUPDATE installation and local readiness checks completed."
+    echo "Panel URL: sudo cat /etc/xupdate/access.txt"
+    echo "After Cloudflare DNS is ready: sudo xupdate doctor --public"
+    echo "An authenticated client connection must be tested separately."
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    xupdate_bootstrap_main "$@"
+fi

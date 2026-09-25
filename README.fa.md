@@ -20,6 +20,18 @@ sudo bash install.sh
 sha256sum -c x-ui.db.sha256
 ```
 
+## نصب خودکار با Cloud-init و Startup Script
+
+فایل آمادهٔ [`cloud-init/xupdate.yaml`](cloud-init/xupdate.yaml) را هنگام ساخت سرور در قسمت User Data یا Cloud config قرار بده. برای بخش‌هایی که اسکریپت Bash می‌خواهند و برای نصب مستقیم با SSH، فایل [`scripts/bootstrap.sh`](scripts/bootstrap.sh) آماده است:
+
+```bash
+curl -fL --retry 5 --connect-timeout 15 --max-time 180 \
+  https://raw.githubusercontent.com/exirhub/xupdate/main/scripts/bootstrap.sh \
+  -o /tmp/xupdate-bootstrap.sh && sudo bash /tmp/xupdate-bootstrap.sh
+```
+
+روش Hetzner، OVH/OpenStack، DigitalOcean، Vultr، Linode، AWS، Azure، Google Compute Engine و سرورهای دیگر در [راهنمای دیتاسنترها](cloud-init/README.fa.md) آمده است. اجرای دوباره نصب کامل‌شده را جایگزین نمی‌کند؛ حذف بدون پشتیبان فقط با `--clean-install` است. اسکریپت [`scripts/diagnose.sh`](scripts/diagnose.sh) نیز برای بررسی وضعیت، DNS، پورت‌ها و لاگ‌ها اضافه شده است.
+
 ## پیش‌نیازها و بسته‌های قبلی
 
 بستهٔ نصب خصوصی که قبلاً دانلود کرده‌ای نیز همچنان با این دستورها قابل استفاده است:
